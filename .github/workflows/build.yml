@@ -1,0 +1,63 @@
+name: Build M8 kernel (Lineage 18.1) + MHL force-1080p60 fix
+
+# 触发：推送到任意分支自动跑；也可在 Actions 页手动 Run workflow
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04   # GitHub 免费 Linux x86_64 编译机（你的 Windows/手机都不用装 Linux）
+    steps:
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git curl xz-utils build-essential bc flex bison libssl-dev
+
+      - name: Clone LineageOS msm8974 kernel (lineage-18.1)
+        run: |
+          git clone --depth 1 -b lineage-18.1 \
+            https://github.com/LineageOS/android_kernel_htc_msm8974.git kernel
+
+      - name: Clone LineageOS arm-linux-androideabi-4.9 toolchain
+        run: |
+          git clone --depth 1 \
+            https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git toolchain
+
+      - name: Write MHL force-1080p60 patch (embedded) and apply
+        run: |
+          echo 'LS0tIGEvZHJpdmVycy92aWRlby9tc20vbWRzcy9tZHNzX2hkbWlfdHguYworKysgYi9kcml2ZXJzL3ZpZGVvL21zbS9tZHNzL21kc3NfaGRtaV90eC5jCkBAIC0zOCw3ICszOCw3IEBACiAjZGVmaW5lIERSVl9OQU1FICJoZG1pLXR4IgogI2RlZmluZSBDT01QQVRJQkxFX05BTUUgInFjb20saGRtaS10eCIKIAotI2RlZmluZSBERUZBVUxUX1ZJREVPX1JFU09MVVRJT04gSERNSV9WRlJNVF82NDB4NDgwcDYwXzRfMworI2RlZmluZSBERUZBVUxUX1ZJREVPX1JFU09MVVRJT04gSERNSV9WRlJNVF8xOTIweDEwODBwNjBfMTZfOQogCiAvKiBIRE1JIFBIWS9QTEwgYml0IGZpZWxkIG1hY3JvcyAqLwogI2RlZmluZSBTV19SRVNFVCBCSVQoMikKQEAgLTEyMTUsNiArMTIxNSw3IEBACiAJREVWX0RCRygiJXM6IEdvdCBIUEQgaW50ZXJydXB0XG4iLCBfX2Z1bmNfXyk7CiAKIAlpZiAoaGRtaV9jdHJsLT5ocGRfc3RhdGUpIHsKKwkJaW50IHJjID0gMDsKIAkJaWYgKGhkbWlfdHhfZW5hYmxlX3Bvd2VyKGhkbWlfY3RybCwgSERNSV9UWF9ERENfUE0sIHRydWUpKSB7CiAJCQlERVZfRVJSKCIlczogRmFpbGVkIHRvIGVuYWJsZSBkZGMgcG93ZXJcbiIsIF9fZnVuY19fKTsKIAkJCXJldHVybjsKQEAgLTEyMjMsNyArMTIyNCwxMyBAQAogCQlEU1NfUkVHX1dfTkQoaW8sIEhETUlfRERDX0FSQklUUkFUSU9OICwKIAkJCURTU19SRUdfUihpbywgSERNSV9ERENfQVJCSVRSQVRJT04pICYgfihCSVQoNCkpKTsKIAotCQloZG1pX3R4X3JlYWRfc2lua19pbmZvKGhkbWlfY3RybCk7CisJCXJjID0gaGRtaV90eF9yZWFkX3NpbmtfaW5mbyhoZG1pX2N0cmwpOworCQlpZiAocmMpIHsKKwkJCURFVl9XQVJOKCIlczogRURJRCByZWFkIGZhaWxlZCAocmM9JWQpOyBmb3JjaW5nIDEwODBwNjAgb3V0cHV0XG4iLAorCQkJCV9fZnVuY19fLCByYyk7CisJCQloZG1pX2N0cmwtPnZpZGVvX3Jlc29sdXRpb24gPQorCQkJCUhETUlfVkZSTVRfMTkyMHgxMDgwcDYwXzE2Xzk7CisJCX0KIAkJaGRtaV90eF9zZW5kX2NhYmxlX25vdGlmaWNhdGlvbihoZG1pX2N0cmwsIDEpOwogCQlERVZfSU5GTygiJXM6IHNlbnNlIGNhYmxlIENPTk5FQ1RFRDogc3RhdGUgc3dpdGNoIHRvICVkXG4iLAogCQkJX19mdW5jX18sIGhkbWlfY3RybC0+c2Rldi5zdGF0ZSk7Cg==' | base64 -d > mhl_force_1080p.patch
+          cd kernel
+          git apply ../mhl_force_1080p.patch || patch -p1 -l --fuzz=3 < ../mhl_force_1080p.patch
+          cd ..
+
+      - name: Build kernel (m8_defconfig, ARCH=arm)
+        run: |
+          set +o pipefail
+          export ARCH=arm
+          export CROSS_COMPILE=$PWD/toolchain/bin/arm-linux-androideabi-
+          cd kernel
+          make m8_defconfig
+          make -j"$(nproc)" zImage-dtb 2>&1 | tee /tmp/build.log
+          if [ ! -f arch/arm/boot/zImage-dtb ]; then
+            echo "BUILD FAILED: zImage-dtb not produced"
+            tail -n 60 /tmp/build.log
+            exit 1
+          fi
+          cd ..
+
+      - name: Show build output
+        run: |
+          ls -la kernel/arch/arm/boot/ | grep -E 'Image|zImage' || true
+          echo "---- kernel release ----"
+          cat kernel/include/config/kernel.release 2>/dev/null || true
+
+      - name: Upload kernel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: m8-kernel-zImage-dtb
+          if-no-files-found: warn
+          path: |
+            kernel/arch/arm/boot/zImage-dtb
+            kernel/arch/arm/boot/zImage
+            kernel/arch/arm/boot/dts/*.dtb
